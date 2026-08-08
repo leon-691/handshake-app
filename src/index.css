@@ -1,0 +1,63 @@
+:root {
+  --accent-color: #4ade80;
+  --bg-color: #0f0f0f;
+  --border-radius: 8px;
+}
+
+.status-online {
+  color: var(--accent-color);
+  font-weight: bold;
+}
+.status-error {
+  color: #ff5555;
+  font-weight: bold;
+}
+.status-offline {
+  color: #888;
+}
+.btn-primary {
+  background-color: var(--accent-color);
+  color: var(--bg-color);
+  border: none;
+  padding: 12px 24px;
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background 0.2s;
+}
+.btn-primary:hover {
+  opacity: 0.9;
+}
+.btn-stop {
+  background-color: #ff5555;
+  color: var(--bg-color);
+  border: none;
+  padding: 12px 24px;
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: bold;
+  margin-top: 10px;
+  transition: background 0.2s;
+}
+.btn-stop:hover {
+  opacity: 0.9;
+}
+.interactive-status {
+  margin-top: 10px;
+}
+.progress-bar {
+  width: 200px;
+  height: 8px;
+  background: #333;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent-color);
+  width: 0%;
+  transition: width 0.2s ease;
+}
