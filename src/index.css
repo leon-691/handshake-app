@@ -15,6 +15,52 @@
 .status-offline {
   color: #888;
 }
+.video-container {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  overflow: hidden;
+  border-radius: var(--border-radius);
+}
+.video-container video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* fills the fixed aspect-ratio box regardless of the
+  camera's actual native resolution, instead of the container's size being
+  at the mercy of whatever the video's intrinsic size happens to be */
+  transform: scaleX(-1); /* selfie-mirror view -- was previously set inline
+  and got dropped when this rule was introduced; the 3D canvas layers match
+  this same transform so all three layers (video, hand, debug dots) mirror
+  together consistently */
+}
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.error-message {
+  color: #ff8080;
+  max-width: 360px;
+}
+.debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: #888;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
 .btn-primary {
   background-color: var(--accent-color);
   color: var(--bg-color);

@@ -1,8 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useCameraService } from './services/CameraService';
 import { useHandDetector } from './services/HandDetector';
 import { useHandshakeState } from './hooks/useHandshakeState';
 import { useHandRenderer } from './hooks/useHandRenderer';
+import { useLandmarkDebugOverlay } from './hooks/useLandmarkDebugOverlay';
 import { useStore } from './store/useStore';
 import './index.css';
 
@@ -30,10 +31,13 @@ const App: React.FC = () => {
     modelLoadError,
   } = useStore();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const debugCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [showDebugLandmarks, setShowDebugLandmarks] = useState(true);
 
   useHandDetector(videoRef);
   useHandshakeState();
   useHandRenderer(canvasRef);
+  useLandmarkDebugOverlay(debugCanvasRef, showDebugLandmarks);
 
   // The video/canvas pair is ALWAYS mounted -- it must be, so `videoRef`
   // actually has something to attach to before a stream ever exists.
@@ -77,14 +81,8 @@ const App: React.FC = () => {
       </header>
 
       <main className="app-main">
-        <div className="video-container" style={{ position: 'relative' }}>
-          <video
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ transform: 'scaleX(-1)', visibility: showOverlay ? 'hidden' : 'visible' }}
-          />
+        <div className="video-container">
+          <video ref={videoRef} autoPlay muted playsInline style={{ visibility: showOverlay ? 'hidden' : 'visible' }} />
           <canvas
             ref={canvasRef}
             style={{
@@ -101,6 +99,21 @@ const App: React.FC = () => {
               visibility: showOverlay ? 'hidden' : 'visible',
             }}
           />
+          {showDebugLandmarks && (
+            <canvas
+              ref={debugCanvasRef}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                transform: 'scaleX(-1)', // same mirror as the video/3D layer, same reason
+                visibility: showOverlay ? 'hidden' : 'visible',
+              }}
+            />
+          )}
 
           {showOverlay && (
             <div className="placeholder">
@@ -120,6 +133,14 @@ const App: React.FC = () => {
             </button>
           )}
         </div>
+        <label className="debug-toggle">
+          <input
+            type="checkbox"
+            checked={showDebugLandmarks}
+            onChange={(e) => setShowDebugLandmarks(e.target.checked)}
+          />
+          Show tracking points (debug)
+        </label>
       </main>
 
       <footer className="app-footer">

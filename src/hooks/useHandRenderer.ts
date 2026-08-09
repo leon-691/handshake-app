@@ -42,7 +42,17 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
     camera.position.set(0, 0, 4);
 
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+    // updateStyle=false: let CSS (the .video-container/canvas rules) own the
+    // canvas's DISPLAYED size; Three.js only controls the drawing-buffer
+    // resolution. Found on review: the default (true) makes setSize() write
+    // explicit pixel width/height directly onto canvas.style, which had been
+    // silently overriding the CSS width:100%/height:100% -- and since it
+    // only ran once at mount (before the video/container had a real size to
+    // read), the canvas got locked to whatever near-zero/viewport-width
+    // guess existed at that instant and never corrected itself except on an
+    // actual window resize. This is what put the rendered hand outside the
+    // video area.
+    renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
@@ -178,10 +188,19 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
     const handleResize = () => {
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
-      renderer.setSize(width, height);
+      renderer.setSize(width, height, false); // false: see the setSize call above
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
     };
+    // ResizeObserver instead of only a window 'resize' listener: the canvas's
+    // actual size can change for reasons that never fire a window resize
+    // event at all -- e.g. the video finishing its metadata load and the
+    // aspect-ratio'd container settling to its real size. This is what
+    // actually keeps the canvas correctly sized going forward, the
+    // window-resize listener alone was the gap that let the wrong initial
+    // size stick.
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(canvas);
     window.addEventListener('resize', handleResize);
     handleResize();
 
@@ -189,6 +208,7 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
       disposed = true;
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       handGroup.traverse((obj) => {
         const mesh = obj as THREE.Mesh;
         if (mesh.geometry) mesh.geometry.dispose();
