@@ -5,6 +5,7 @@ import { useStore } from '../store/useStore';
 import { JOINT_NAMES, type JointName, skeletonFromWorldLandmarks } from '../core/HandSkeleton';
 import { captureBindPose, precomputeBindDirs, applyRetargeting, type BindDirs } from '../core/Retargeting';
 import { PoseDelayBuffer } from '../core/PoseBuffer';
+import { normalizedToWorld, normalizedSpanToWorld, type CameraParams } from '../core/ScreenSpace';
 
 // Built from BASE_URL (not a hardcoded '/models/hand.glb') for the same
 // reason vite.config.ts sets base:'./' -- a plain string here isn't
@@ -23,6 +24,19 @@ const RESPONSE_DELAY_MS = 30;
 // extending into frame, flagged so it's easy to challenge/retune.
 const ENTRY_DURATION_MS = 500;
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+// Depth (world Z) the hand is placed at. MediaPipe doesn't give reliable
+// absolute camera-to-hand distance (see Phase 1 notes on world-landmark
+// limitations), so this is a fixed plane rather than derived per-frame --
+// that's a real simplification, not a magic number standing in for a
+// screen-space calculation like the old position formula was.
+const HAND_DEPTH_Z = 0;
+
+// MediaPipe landmark indices for WRIST and MIDDLE_FINGER_TIP -- used as the
+// reference pair for both the model's own bind-pose size (measured from the
+// loaded GLB, not hardcoded) and the live on-screen hand size.
+const WRIST_IDX = 0;
+const MIDDLE_TIP_IDX = 12;
 
 export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | null>) => {
   useEffect(() => {
@@ -68,6 +82,11 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
     let rootBone: THREE.Bone | null = null;
     let modelLoaded = false;
     let disposed = false;
+    // Measured from the loaded model's own bind pose (WRIST -> MIDDLE_TIP
+    // distance, in the GLB's native units) -- NOT a hardcoded constant, so a
+    // different model swapped into public/models/hand.glb is sized correctly
+    // automatically rather than needing this number hand-tuned again.
+    let modelReferenceSize = 0;
 
     const loader = new GLTFLoader();
     loader.load(
@@ -95,9 +114,12 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         bindDirs = precomputeBindDirs(bindPose);
         modelLoaded = Object.keys(bindDirs).length > 0;
 
-        if (!modelLoaded) {
+        if (bindPose.WRIST && bindPose.MIDDLE_TIP) {
+          modelReferenceSize = bindPose.WRIST.distanceTo(bindPose.MIDDLE_TIP);
+        }
+        if (!modelLoaded || modelReferenceSize === 0) {
           console.warn(
-            '[useHandRenderer] hand.glb loaded but no bones matched the expected joint names -- retargeting will be a no-op.'
+            '[useHandRenderer] hand.glb loaded but bones/reference-size could not be established -- retargeting and scaling will be a no-op.'
           );
         }
       },
@@ -113,6 +135,11 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
     let entryStartTimeMs: number | null = null;
     const entryStartPos = new THREE.Vector3();
     const lastTargetPos = new THREE.Vector3();
+    let smoothedScale = 0; // exponentially smoothed -- the raw per-frame
+    // scale from a 2-landmark screen-space distance is noisier than
+    // position (small pixel jitter in either point has an outsized effect
+    // on a distance measurement), so this is smoothed the same conceptual
+    // way OneEuroFilter smooths landmarks, just applied to a derived scalar.
 
     const animate = () => {
       if (disposed) return;
@@ -135,6 +162,7 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         // animation rather than resume mid-way through a stale one
         entryStartTimeMs = null;
         poseBuffer.reset();
+        smoothedScale = 0;
       }
 
       // Hide the virtual hand entirely rather than leaving it frozen in its
@@ -151,14 +179,33 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         const live = skeletonFromWorldLandmarks(delayed);
         applyRetargeting(bones, bindDirs, live);
 
-        // On-screen placement uses the normalized (image-space) landmark for
-        // the wrist, NOT worldLandmarks -- worldLandmarks are metric/relative
-        // to the hand's own centroid and carry no on-screen position info.
+        // On-screen placement/scale use the normalized (image-space)
+        // landmarks, NOT worldLandmarks -- worldLandmarks are metric/relative
+        // to the hand's own centroid and carry no on-screen position or
+        // apparent-size information at all.
         const firstHand = landmarks?.[0];
-        const wrist2D = firstHand?.[0];
+        const wrist2D = firstHand?.[WRIST_IDX];
+        const middleTip2D = firstHand?.[MIDDLE_TIP_IDX];
         if (rootBone && wrist2D) {
-          tmpSkeletonPos.set((wrist2D.x - 0.5) * 4, (0.5 - wrist2D.y) * 4, 0);
+          const camParams: CameraParams = { fovDegrees: camera.fov, aspect: camera.aspect, cameraZ: camera.position.z };
+          const worldPos = normalizedToWorld(wrist2D.x, wrist2D.y, HAND_DEPTH_Z, camParams);
+          tmpSkeletonPos.set(worldPos.x, worldPos.y, HAND_DEPTH_Z);
           lastTargetPos.copy(tmpSkeletonPos);
+
+          if (middleTip2D && modelReferenceSize > 0) {
+            const liveScreenSpan = normalizedSpanToWorld(
+              wrist2D.x, wrist2D.y, middleTip2D.x, middleTip2D.y, HAND_DEPTH_Z, camParams
+            );
+            const targetScale = liveScreenSpan / modelReferenceSize;
+            // exponential smoothing (not a magic appearance number -- a
+            // fixed-rate low-pass on a noisy derived scalar) plus a sane
+            // numeric safety clamp against momentary degenerate landmarks
+            // (e.g. wrist and fingertip briefly coinciding) rather than
+            // ever letting scale hit zero/infinity.
+            const clamped = Math.min(Math.max(targetScale, 0.05), 10);
+            smoothedScale = smoothedScale === 0 ? clamped : smoothedScale + (clamped - smoothedScale) * 0.2;
+            handGroup.scale.setScalar(smoothedScale);
+          }
 
           if (!wasHandPresent) {
             // Hand just (re)appeared: start the virtual hand from the
@@ -180,6 +227,7 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         }
       }
       wasHandPresent = handPresent;
+
 
       renderer.render(scene, camera);
     };
