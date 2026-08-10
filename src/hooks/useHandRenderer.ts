@@ -114,6 +114,23 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         bindDirs = precomputeBindDirs(bindPose);
         modelLoaded = Object.keys(bindDirs).length > 0;
 
+        // Root cause of the position bug: `model`'s WRIST bone has a large
+        // non-zero LOCAL position baked in (inherited from the original,
+        // never-recentered mesh coordinates -- measured directly from the
+        // GLB as ~[-1.3, -1.63, 2.75]). Without this offset, the rendered
+        // wrist position was `handGroup.position + thatOffset`, not
+        // `handGroup.position` alone, so setting handGroup.position to the
+        // tracked screen position never actually put the wrist there.
+        // Canceling it here makes WRIST sit at local (0,0,0) relative to
+        // handGroup, so handGroup.position alone is authoritative --
+        // exactly the HandRoot/HandModel split suggested: handGroup is
+        // HandRoot (follows tracked wrist), `model` is HandModel (carries
+        // only this one-time recentering offset).
+        if (bindPose.WRIST) {
+          model.position.copy(bindPose.WRIST).negate();
+          model.updateMatrixWorld(true);
+        }
+
         if (bindPose.WRIST && bindPose.MIDDLE_TIP) {
           modelReferenceSize = bindPose.WRIST.distanceTo(bindPose.MIDDLE_TIP);
         }
