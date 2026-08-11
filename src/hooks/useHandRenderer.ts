@@ -2,8 +2,9 @@ import { useEffect } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { useStore } from '../store/useStore';
-import { JOINT_NAMES, type JointName, skeletonFromWorldLandmarks } from '../core/HandSkeleton';
+import { JOINT_NAMES, type JointName, type HandSkeleton, skeletonFromWorldLandmarks } from '../core/HandSkeleton';
 import { captureBindPose, precomputeBindDirs, applyRetargeting, type BindDirs } from '../core/Retargeting';
+import { computePalmBasis, alignmentQuaternion, rotateSkeletonAbout, type PalmBasis } from '../core/PalmBasis';
 import { PoseDelayBuffer } from '../core/PoseBuffer';
 import { normalizedToWorld, normalizedSpanToWorld, type CameraParams } from '../core/ScreenSpace';
 
@@ -87,6 +88,12 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
     // different model swapped into public/models/hand.glb is sized correctly
     // automatically rather than needing this number hand-tuned again.
     let modelReferenceSize = 0;
+    // Orthonormal reference frame from the model's OWN bind pose, computed
+    // once at load. This is what makes retargeting correct at all: without
+    // it, live (MediaPipe) directions and bind (GLB-native) directions were
+    // being compared as if they shared a coordinate convention when they
+    // don't -- see PalmBasis.ts for the full reasoning.
+    let bindBasis: PalmBasis | null = null;
 
     const loader = new GLTFLoader();
     loader.load(
@@ -134,9 +141,15 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         if (bindPose.WRIST && bindPose.MIDDLE_TIP) {
           modelReferenceSize = bindPose.WRIST.distanceTo(bindPose.MIDDLE_TIP);
         }
-        if (!modelLoaded || modelReferenceSize === 0) {
+        if (bindPose.WRIST && bindPose.INDEX_MCP && bindPose.MIDDLE_MCP && bindPose.PINKY_MCP) {
+          // safe: the four keys computePalmBasis actually reads are all
+          // confirmed present right above, even though BindPose's type is
+          // Partial<HandSkeleton> in general
+          bindBasis = computePalmBasis(bindPose as HandSkeleton);
+        }
+        if (!modelLoaded || modelReferenceSize === 0 || !bindBasis) {
           console.warn(
-            '[useHandRenderer] hand.glb loaded but bones/reference-size could not be established -- retargeting and scaling will be a no-op.'
+            '[useHandRenderer] hand.glb loaded but bones/reference-size/orientation-basis could not be established -- retargeting and scaling will be a no-op.'
           );
         }
       },
@@ -194,7 +207,24 @@ export const useHandRenderer = (canvasRef: React.RefObject<HTMLCanvasElement | n
         // being a perfect, instantaneous mirror of it.
         const delayed = poseBuffer.sampleDelayed(nowMs, RESPONSE_DELAY_MS) ?? worldLandmarks;
         const live = skeletonFromWorldLandmarks(delayed);
-        applyRetargeting(bones, bindDirs, live);
+
+        if (bindBasis) {
+          // Bridge the two coordinate conventions (see PalmBasis.ts): find
+          // the rotation between the live hand's own orientation and the
+          // model's bind-pose orientation, apply the inverse to the WRIST
+          // bone (so the whole forearm/hand visually points the right way),
+          // and re-express the live skeleton in "GLB-native-equivalent"
+          // terms before doing per-bone retargeting -- otherwise bind and
+          // live directions are being compared across mismatched coordinate
+          // systems, which is what produced the earlier twisted/broken poses.
+          const liveBasis = computePalmBasis(live);
+          const qAlign = alignmentQuaternion(liveBasis, bindBasis);
+          if (bones.WRIST) {
+            bones.WRIST.quaternion.copy(qAlign).invert();
+          }
+          const alignedLive = rotateSkeletonAbout(live, live.WRIST, qAlign);
+          applyRetargeting(bones, bindDirs, alignedLive);
+        }
 
         // On-screen placement/scale use the normalized (image-space)
         // landmarks, NOT worldLandmarks -- worldLandmarks are metric/relative
