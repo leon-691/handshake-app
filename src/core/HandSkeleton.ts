@@ -61,13 +61,26 @@ export interface MediaPipePoint {
  * normalized 0-1 image-space landmarks) into a named HandSkeleton in
  * Three.js's Y-up convention.
  *
- * MediaPipe's coordinate space has +Y pointing down the image and +Z pointing
- * toward the camera being treated as negative depth -- the (y,z) negation
- * below is the standard flip to bring that into a Y-up right-handed scene.
- * This has NOT been verified against a live camera (no browser/camera in
- * this environment) -- if the model reads as mirrored or upside-down on
- * first real test, flip the sign of Y and/or Z here, it's isolated to this
- * one function.
+ * All three axes are negated, not just Y/Z. Reasoning: MediaPipe's raw
+ * convention (X right, Y down, Z increasing away from camera) is itself
+ * right-handed, and negating exactly two axes (as an earlier version of
+ * this function did, Y and Z only) is a proper rotation -- it preserves
+ * chirality, it cannot introduce OR fix a reflection. If the live tracking
+ * data and the GLB's bind-pose data don't actually share the same chirality
+ * (plausible: the GLB's own coordinate convention comes verbatim from a
+ * ZBrush/OBJ export whose handedness was never independently verified),
+ * no amount of rotation-based alignment (see PalmBasis.ts) can correct for
+ * it -- only an odd number of axis negations (a genuine reflection) can.
+ * Negating all three here is the isolated, minimal way to do that.
+ *
+ * IMPORTANT CAVEAT: this is the best-reasoned hypothesis available without
+ * a live camera to test against (Google's docs don't publish an explicit
+ * per-axis sign convention for world landmarks), corroborated by at least
+ * one independent MediaPipe+Three.js integration doing the same 3-axis
+ * negation. It is not proven with certainty -- if poses still look
+ * mirrored/backwards after this change, that's evidence against this
+ * specific hypothesis, not a sign the general approach (chirality
+ * mismatch) is wrong.
  */
 export function skeletonFromWorldLandmarks(points: MediaPipePoint[]): HandSkeleton {
   if (points.length !== 21) {
@@ -78,7 +91,7 @@ export function skeletonFromWorldLandmarks(points: MediaPipePoint[]): HandSkelet
     const name = MEDIAPIPE_INDEX_TO_JOINT[i];
     const p = points[i];
     if (!name || !p) continue; // unreachable given the length check above, but satisfies noUncheckedIndexedAccess
-    skeleton[name] = new THREE.Vector3(p.x, -p.y, -p.z);
+    skeleton[name] = new THREE.Vector3(-p.x, -p.y, -p.z);
   }
   return skeleton;
 }
